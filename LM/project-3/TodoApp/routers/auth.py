@@ -1,21 +1,29 @@
-from datetime import timedelta, timezone, datetime
+from datetime import datetime, timedelta, timezone
+from os import getenv
 from typing import Annotated
 
 from database import SessionLocal
+from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt
 from models import Users
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-router = APIRouter()
+load_dotenv()
+router = APIRouter(
+    prefix="/auth",
+    tags=["auth"],
+)
 
-SECRET_KEY = 'f48717a7979060a9967d5aa407f12975164e62e0f079c40001c2db2d1191d150'
-ALGORITHM = 'HS256'
+SECRET_KEY = getenv("BCRYPT_SECRET_KEY")
+ALGORITHM = "HS256"
 
 bcrypt_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_bearer = OAuth2PasswordBearer(tokenUrl="auth/token")
+
 
 class CreateUserRequest(BaseModel):
     username: str
@@ -24,6 +32,7 @@ class CreateUserRequest(BaseModel):
     last_name: str
     password: str
     role: str
+
 
 class Token(BaseModel):
     access_token: str
@@ -37,7 +46,9 @@ def get_db():
     finally:
         db.close()
 
+
 db_depenency = Annotated[Session, Depends(get_db)]
+
 
 def authenticate_user(db: Session, username: str, password: str):
     user = db.query(Users).filter(Users.username == username).first()
@@ -47,16 +58,26 @@ def authenticate_user(db: Session, username: str, password: str):
         return False
     return user
 
+
 def create_access_token(user, expires_delta: timedelta = timedelta(minutes=60)):
-    payload = {
-        "sub": user.username,
-        "user_id": user.id,
-        "exp": datetime.now(timezone.utc) + expires_delta
-    }
+    payload = {"sub": user.username, "user_id": user.id, "exp": datetime.now(timezone.utc) + expires_delta}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-@router.post("/auth/", status_code=status.HTTP_201_CREATED)
+async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        user_id: int = payload.get("id")
+        if username is None or user_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate user.")
+    except jwt.JWTError as err:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate user.") from err
+
+    return {"username": username, "id": user_id}
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_user(db: db_depenency, create_user_request: CreateUserRequest):
     create_user_model = Users(
         email=create_user_request.email,
@@ -75,7 +96,7 @@ async def create_user(db: db_depenency, create_user_request: CreateUserRequest):
 async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: db_depenency):
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
-        raise HTTPException(status_code=401, detail="Failed authentication")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate user.")
     token = create_access_token(user)
 
     return {"access_token": token, "token_type": "bearer"}
