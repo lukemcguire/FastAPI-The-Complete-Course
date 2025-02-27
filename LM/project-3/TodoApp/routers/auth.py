@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from os import getenv
-from typing import Annotated
+from typing import Annotated, Optional
 
 from database import SessionLocal
 from dotenv import load_dotenv
@@ -31,7 +31,7 @@ class CreateUserRequest(BaseModel):
     first_name: str
     last_name: str
     password: str
-    role: str
+    role: Optional[str] = "user"
 
 
 class Token(BaseModel):
@@ -60,7 +60,12 @@ def authenticate_user(db: Session, username: str, password: str):
 
 
 def create_access_token(user, expires_delta: timedelta = timedelta(minutes=60)):
-    payload = {"sub": user.username, "user_id": user.id, "exp": datetime.now(timezone.utc) + expires_delta}
+    payload = {
+        "sub": user.username,
+        "user_id": user.id,
+        "user_role": user.role,
+        "exp": datetime.now(timezone.utc) + expires_delta,
+    }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -69,12 +74,13 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         user_id: int = payload.get("user_id")
+        user_role: str = payload.get("user_role")
         if username is None or user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate user.")
     except jwt.JWTError as err:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate user.") from err
 
-    return {"username": username, "id": user_id}
+    return {"username": username, "id": user_id, "user_role": user_role}
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
